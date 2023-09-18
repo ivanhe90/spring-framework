@@ -1,5 +1,5 @@
 /*
- * Copyright 2002-2020 the original author or authors.
+ * Copyright 2002-2023 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -21,8 +21,10 @@ import java.util.Collection;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.Predicate;
 
 import org.springframework.aop.framework.AopProxyUtils;
 import org.springframework.beans.factory.BeanClassLoaderAware;
@@ -51,8 +53,8 @@ import org.springframework.util.ObjectUtils;
  *
  * <p>Implementing ApplicationEventMulticaster's actual {@link #multicastEvent} method
  * is left to subclasses. {@link SimpleApplicationEventMulticaster} simply multicasts
- * all events to all registered listeners, invoking them in the calling thread.
- * Alternative implementations could be more sophisticated in those respects.
+ * all events to all registered listeners, invoking them in the calling thread by
+ * default. Alternative implementations could be more sophisticated in those respects.
  *
  * @author Juergen Hoeller
  * @author Stephane Nicoll
@@ -81,10 +83,10 @@ public abstract class AbstractApplicationEventMulticaster
 
 	@Override
 	public void setBeanFactory(BeanFactory beanFactory) {
-		if (!(beanFactory instanceof ConfigurableBeanFactory)) {
+		if (!(beanFactory instanceof ConfigurableBeanFactory cbf)) {
 			throw new IllegalStateException("Not running in a ConfigurableBeanFactory: " + beanFactory);
 		}
-		this.beanFactory = (ConfigurableBeanFactory) beanFactory;
+		this.beanFactory = cbf;
 		if (this.beanClassLoader == null) {
 			this.beanClassLoader = this.beanFactory.getBeanClassLoader();
 		}
@@ -133,6 +135,22 @@ public abstract class AbstractApplicationEventMulticaster
 	public void removeApplicationListenerBean(String listenerBeanName) {
 		synchronized (this.defaultRetriever) {
 			this.defaultRetriever.applicationListenerBeans.remove(listenerBeanName);
+			this.retrieverCache.clear();
+		}
+	}
+
+	@Override
+	public void removeApplicationListeners(Predicate<ApplicationListener<?>> predicate) {
+		synchronized (this.defaultRetriever) {
+			this.defaultRetriever.applicationListeners.removeIf(predicate);
+			this.retrieverCache.clear();
+		}
+	}
+
+	@Override
+	public void removeApplicationListenerBeans(Predicate<String> predicate) {
+		synchronized (this.defaultRetriever) {
+			this.defaultRetriever.applicationListenerBeans.removeIf(predicate);
 			this.retrieverCache.clear();
 		}
 	}
@@ -356,8 +374,8 @@ public abstract class AbstractApplicationEventMulticaster
 	protected boolean supportsEvent(
 			ApplicationListener<?> listener, ResolvableType eventType, @Nullable Class<?> sourceType) {
 
-		GenericApplicationListener smartListener = (listener instanceof GenericApplicationListener ?
-				(GenericApplicationListener) listener : new GenericApplicationListenerAdapter(listener));
+		GenericApplicationListener smartListener = (listener instanceof GenericApplicationListener gal ? gal :
+				new GenericApplicationListenerAdapter(listener));
 		return (smartListener.supportsEventType(eventType) && smartListener.supportsSourceType(sourceType));
 	}
 
@@ -380,20 +398,14 @@ public abstract class AbstractApplicationEventMulticaster
 
 		@Override
 		public boolean equals(@Nullable Object other) {
-			if (this == other) {
-				return true;
-			}
-			if (!(other instanceof ListenerCacheKey)) {
-				return false;
-			}
-			ListenerCacheKey otherKey = (ListenerCacheKey) other;
-			return (this.eventType.equals(otherKey.eventType) &&
-					ObjectUtils.nullSafeEquals(this.sourceType, otherKey.sourceType));
+			return (this == other || (other instanceof ListenerCacheKey that &&
+					this.eventType.equals(that.eventType) &&
+					ObjectUtils.nullSafeEquals(this.sourceType, that.sourceType)));
 		}
 
 		@Override
 		public int hashCode() {
-			return this.eventType.hashCode() * 29 + ObjectUtils.nullSafeHashCode(this.sourceType);
+			return Objects.hash(this.eventType, this.sourceType);
 		}
 
 		@Override
